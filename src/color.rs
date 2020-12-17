@@ -378,32 +378,6 @@ define_colors! {
     LumaA, 2, 1, "YA", ColorType::La8, ColorType::La16, #[doc = "Grayscale colors + alpha channel"];
 }
 
-/// Provides color conversions for the different pixel types.
-pub trait FromColor<Other> {
-    /// Changes `self` to represent `Other` in the color space of `Self`
-    fn from_color(&mut self, _: &Other);
-}
-
-/// Copy-based conversions to target pixel types using `FromColor`.
-// FIXME: this trait should be removed and replaced with real color space models
-// rather than assuming sRGB.
-pub(crate) trait IntoColor<Other> {
-    /// Constructs a pixel of the target type and converts this pixel into it.
-    fn into_color(&self) -> Other;
-}
-
-impl<O, S> IntoColor<O> for S
-where
-    O: Pixel + FromColor<S> {
-    fn into_color(&self) -> O {
-        // Note we cannot use Pixel::CHANNELS_COUNT here to directly construct
-        // the pixel due to a current bug/limitation of consts.
-        let mut pix = O::from_channels(Zero::zero(), Zero::zero(), Zero::zero(), Zero::zero());
-        pix.from_color(self);
-        pix
-    }
-}
-
 /// Coefficients to transform from sRGB to a CIE Y (luminance) value.
 const SRGB_LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -431,81 +405,33 @@ fn upcast_channel(c8: u8) -> u16 {
 }
 
 macro_rules! impl_from {
+    // Stage 0: Parse the DSL into nested token trees.
     (
-        ( $(
-            ($in_el:ident, $out_el:ident): $convert:ident;
-        )* )
-        $( $defs:tt )+
+        $( ($in_el:ident, $out_el:ident): $convert:ident; )*
+        $(
+            | $in_ty:ident([ $( $cmp:ident ),* ]) |
+            $(
+                => $out_ty:ident( $body:expr )
+            )+
+            ;
+        )*
     ) => {
         impl_from!(
-            @elements=(
-                ( @in_el=T, @out_el=T, @convert=(), ),
+            @__split_elements,
+            (
+                ( (T), (T), () ),
                 $(
-                    (
-                        @in_el=$in_el,
-                        @out_el=$out_el,
-                        @convert=($convert),
-                    ),
+                    ( ($in_el), ($out_el), ($convert) ),
                 )*
             ),
-            @defs=( $( $defs )* ),
-        );
-    };
-
-    (
-        @elements=(
-            $(
-                (
-                    @in_el=$in_el:ident,
-                    @out_el=$out_el:ident,
-                    @convert=$convert:tt,
-                ),
-            )*
-        ),
-        @defs=$defs:tt,
-    ) => {
-        $(
-            impl_from!(
-                @in_el=$in_el,
-                @out_el=$out_el,
-                @convert=$convert,
-                @defs=$defs,
-            );
-        )*
-    };
-
-    (
-        @in_el=$in_el:ident,
-        @out_el=$out_el:ident,
-        @convert=$convert:tt,
-        @defs=(
-            $(
-                | $in_ty:ident([ $( $cmp:ident ),* ]) |
-                    =>
-                    $(
-                        $out_ty:ident( $body:expr ) $( ! $( ( $fake:tt ) )? )?
-                    )=>+
-                    ;
-            )*
-        ),
-    ) => {
-        impl_from!(
-            @in_el=$in_el,
-            @out_el=$out_el,
-            @convert=$convert,
-            @defs=(
+            (
                 $(
                     (
-                        @in_ty=$in_ty,
-                        @components=( $( $cmp, )* ),
-                        @outputs=(
+                        ( ($in_ty), ( [ $( $cmp ),* ] ) ),
+                        (
                             $(
-                                (
-                                    @out_ty=$out_ty,
-                                    @body=$body,
-                                    @reflexive=( $( ! $( $fake )? )? ),
-                                ),
-                            )*
+                                ( ($out_ty), ($body) ),
+                            )+
                         ),
                     ),
                 )*
@@ -513,82 +439,95 @@ macro_rules! impl_from {
         );
     };
 
+    // Stage 1: Call recursively for each group of element conversions.
     (
-        @in_el=$in_el:ident,
-        @out_el=$out_el:ident,
-        @convert=$convert:tt,
-        @defs=(
+        @__split_elements,
+        ( $( $el_convert:tt, )* ),
+        $defs:tt,
+    ) => {
+        $(
+            impl_from!(
+                @__split_inputs,
+                $el_convert,
+                $defs,
+            );
+        )*
+    };
+
+    // Stage 2: Call recursively for each input struct type.
+    (
+        @__split_inputs,
+        $el_convert:tt,
+        (
             $(
                 (
-                    @in_ty=$in_ty:ident,
-                    @components=$components:tt,
-                    @outputs=$outputs:tt,
+                    $in_cmp:tt,
+                    $outputs:tt,
                 ),
             )*
         ),
     ) => {
         $(
             impl_from!(
-                @in_el=$in_el,
-                @out_el=$out_el,
-                @convert=$convert,
-                @in_ty=$in_ty,
-                @components=$components,
-                @outputs=$outputs,
+                @__add_same_ty_conversion,
+                $el_convert,
+                $in_cmp,
+                $outputs,
             );
         )*
     };
 
+    // Stage 3: If a conversion function exists (i.e., the input and output elements are not both
+    // `T`), call recursively to also emit `impl From<InTy<InEl>> for InTy<OutEl>`.
+    //
+    // This extra step is required because defining `impl<T> From<InTy<T>> for InTy<T>` would
+    // conflict with the blanket implementation `impl<T> From<T> for T`, defined in `core`.
     (
-        @in_el=$in_el:ident,
-        @out_el=$out_el:ident,
-        @convert=$convert:tt,
-        @in_ty=$in_ty:ident,
-        @components=$components:tt,
-        @outputs=(
-            $(
-                (
-                    @out_ty=$out_ty:ident,
-                    @body=$body:expr,
-                    @reflexive=$refl:tt,
-                ),
-            )*
-        ),
+        @__add_same_ty_conversion,
+        ( $in_el:tt, $out_el:tt, ( $( $convert:ident )? ) ),
+        ( $in_ty:tt, $components:tt ),
+        $outputs:tt,
     ) => {
         $(
             impl_from!(
-                @in_el=$in_el,
-                @out_el=$out_el,
-                @convert=$convert,
-                @in_ty=$in_ty,
-                @components=$components,
-                @out_ty=$out_ty,
-                @body=$body,
-                @reflexive=$refl,
+                @__final,
+                ( $in_el, $out_el, ( $convert ) ),
+                ( $in_ty, $components ),
+                ( $in_ty, $components ),
+            );
+        )?
+
+        impl_from!(
+            @__split_outputs,
+            ( $in_el, $out_el, ( $( $convert )? ) ),
+            ( $in_ty, $components ),
+            $outputs,
+        );
+    };
+
+    // Stage 4: Call recursively for each output definition.
+    (
+        @__split_outputs,
+        $el_convert:tt,
+        $in_cmp:tt,
+        ( $( $out_body:tt, )* ),
+    ) => {
+        $(
+            impl_from!(
+                @__final,
+                $el_convert,
+                $in_cmp,
+                $out_body,
             );
         )*
     };
 
+    // Final stage: Output impl where elements are both `T`.
     (
-        @in_el=T,
-        @out_el=T,
-        @convert=(),
-        @in_ty=$in_ty:ident,
-        @components=$components:tt,
-        @out_ty=$out_ty:ident,
-        @body=$body:expr,
-        @reflexive=(!),
-    ) => {};
-
-    (
-        @in_el=T,
-        @out_el=T,
-        @convert=(),
-        @in_ty=$in_ty:ident,
-        @components=( $( $cmp:ident, )* ),
-        @out_ty=$out_ty:ident,
-        @body=$body:expr,
-        @reflexive=(),
+        @__final,
+        ( (T), (T), () ),
+        ( ($in_ty:ident), ( [ $( $cmp:ident ),* ] ) ),
+        ( ($out_ty:ident), ($body:expr) ),
     ) => {
         impl<T: Primitive> From<$in_ty<T>> for $out_ty<T> {
             #[inline]
@@ -600,24 +539,19 @@ macro_rules! impl_from {
         }
     };
 
+    // Final stage: Output impl where elements are different, and there is a conversion function.
     (
-        @in_el=$in_el:ident,
-        @out_el=$out_el:ident,
-        @convert=( $convert:ident ),
-        @in_ty=$in_ty:ident,
-        @components=( $( $cmp:ident, )* ),
-        @out_ty=$out_ty:ident,
-        @body=$body:expr,
-        @reflexive=$refl:tt,
+        @__final,
+        ( ($in_el:ident), ($out_el:ident), ($convert:ident) ),
+        ( ($in_ty:ident), ( [ $( $cmp:ident ),* ] ) ),
+        ( ($out_ty:ident), ($body:expr) ),
     ) => {
         impl From<$in_ty<$in_el>> for $out_ty<$out_el> {
             #[inline]
             #[allow(unused_variables)]
             fn from(x: $in_ty<$in_el>) -> Self {
                 let $in_ty([ $( $cmp ),* ]) = x;
-                $(
-                    let $cmp = $convert($cmp);
-                )*
+                let [ $( $cmp ),* ] = [ $( $convert($cmp) ),* ];
                 $out_ty($body)
             }
         }
@@ -625,13 +559,10 @@ macro_rules! impl_from {
 }
 
 impl_from! {
-    (
-        (u8, u16): upcast_channel;
-        (u16, u8): downcast_channel;
-    )
+    (u8, u16): upcast_channel;
+    (u16, u8): downcast_channel;
 
     |Rgb([r, g, b])|
-        => Rgb([r, g, b])!
         => Bgr([b, g, r])
         => Luma([to_luma(r, g, b)])
         => Rgba([r, g, b, full_alpha()])
@@ -640,7 +571,6 @@ impl_from! {
 
     |Bgr([b, g, r])|
         => Rgb([r, g, b])
-        => Bgr([b, g, r])!
         => Luma([to_luma(r, g, b)])
         => Rgba([r, g, b, full_alpha()])
         => Bgra([b, g, r, full_alpha()])
@@ -649,7 +579,6 @@ impl_from! {
     |Luma([y])|
         => Rgb([y, y, y])
         => Bgr([y, y, y])
-        => Luma([y])!
         => Rgba([y, y, y, full_alpha()])
         => Bgra([y, y, y, full_alpha()])
         => LumaA([y, full_alpha()]);
@@ -658,7 +587,6 @@ impl_from! {
         => Rgb([r, g, b])
         => Bgr([b, g, r])
         => Luma([to_luma(r, g, b)])
-        => Rgba([r, g, b, a])!
         => Bgra([b, g, r, a])
         => LumaA([to_luma(r, g, b), a]);
 
@@ -667,7 +595,6 @@ impl_from! {
         => Bgr([b, g, r])
         => Luma([to_luma(r, g, b)])
         => Rgba([r, g, b, a])
-        => Bgra([b, g, r, a])!
         => LumaA([to_luma(r, g, b), a]);
 
     |LumaA([y, a])|
@@ -675,8 +602,33 @@ impl_from! {
         => Bgr([y, y, y])
         => Luma([y])
         => Rgba([y, y, y, a])
-        => Bgra([y, y, y, a])
-        => LumaA([y, a])!;
+        => Bgra([y, y, y, a]);
+}
+
+/// Provides color conversions for the different pixel types.
+pub trait FromColor<Other> {
+    /// Changes `self` to represent `Other` in the color space of `Self`
+    fn from_color(&mut self, _: &Other);
+}
+
+/// Copy-based conversions to target pixel types using `FromColor`.
+// FIXME: this trait should be removed and replaced with real color space models
+// rather than assuming sRGB.
+pub(crate) trait IntoColor<Other> {
+    /// Constructs a pixel of the target type and converts this pixel into it.
+    fn into_color(&self) -> Other;
+}
+
+impl<O, S> IntoColor<O> for S
+    where
+        O: Pixel + FromColor<S> {
+    fn into_color(&self) -> O {
+        // Note we cannot use Pixel::CHANNELS_COUNT here to directly construct
+        // the pixel due to a current bug/limitation of consts.
+        let mut pix = O::from_channels(Zero::zero(), Zero::zero(), Zero::zero(), Zero::zero());
+        pix.from_color(self);
+        pix
+    }
 }
 
 impl<In: Pixel, Out: Pixel> FromColor<In> for Out
