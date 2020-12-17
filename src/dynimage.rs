@@ -27,7 +27,7 @@ use crate::buffer_::{
     GrayImage, Gray16Image, ImageBuffer, RgbImage, Rgb16Image, RgbaImage,
     Rgba16Image,
 };
-use crate::color::{self, IntoColor};
+use crate::color;
 use crate::error::{ImageError, ImageFormatHint, ImageResult, ParameterError, ParameterErrorKind, UnsupportedError, UnsupportedErrorKind};
 use crate::flat::FlatSamples;
 use crate::image;
@@ -1050,7 +1050,7 @@ impl GenericImageView for DynamicImage {
     }
 
     fn get_pixel(&self, x: u32, y: u32) -> color::Rgba<u8> {
-        dynamic_map!(*self, ref p -> p.get_pixel(x, y).to_rgba().into_color())
+        dynamic_map!(*self, ref p -> p.get_pixel(x, y).to_rgba().into())
     }
 
     fn inner(&self) -> &Self::InnerImageView {
@@ -1070,10 +1070,10 @@ impl GenericImage for DynamicImage {
             DynamicImage::ImageRgba8(ref mut p) => p.put_pixel(x, y, pixel),
             DynamicImage::ImageBgr8(ref mut p) => p.put_pixel(x, y, pixel.to_bgr()),
             DynamicImage::ImageBgra8(ref mut p) => p.put_pixel(x, y, pixel.to_bgra()),
-            DynamicImage::ImageLuma16(ref mut p) => p.put_pixel(x, y, pixel.to_luma().into_color()),
-            DynamicImage::ImageLumaA16(ref mut p) => p.put_pixel(x, y, pixel.to_luma_alpha().into_color()),
-            DynamicImage::ImageRgb16(ref mut p) => p.put_pixel(x, y, pixel.to_rgb().into_color()),
-            DynamicImage::ImageRgba16(ref mut p) => p.put_pixel(x, y, pixel.into_color()),
+            DynamicImage::ImageLuma16(ref mut p) => p.put_pixel(x, y, pixel.to_luma().into()),
+            DynamicImage::ImageLumaA16(ref mut p) => p.put_pixel(x, y, pixel.to_luma_alpha().into()),
+            DynamicImage::ImageRgb16(ref mut p) => p.put_pixel(x, y, pixel.to_rgb().into()),
+            DynamicImage::ImageRgba16(ref mut p) => p.put_pixel(x, y, pixel.into()),
         }
     }
     /// DEPRECATED: Use iterator `pixels_mut` to blend the pixels directly.
@@ -1085,10 +1085,10 @@ impl GenericImage for DynamicImage {
             DynamicImage::ImageRgba8(ref mut p) => p.blend_pixel(x, y, pixel),
             DynamicImage::ImageBgr8(ref mut p) => p.blend_pixel(x, y, pixel.to_bgr()),
             DynamicImage::ImageBgra8(ref mut p) => p.blend_pixel(x, y, pixel.to_bgra()),
-            DynamicImage::ImageLuma16(ref mut p) => p.blend_pixel(x, y, pixel.to_luma().into_color()),
-            DynamicImage::ImageLumaA16(ref mut p) => p.blend_pixel(x, y, pixel.to_luma_alpha().into_color()),
-            DynamicImage::ImageRgb16(ref mut p) => p.blend_pixel(x, y, pixel.to_rgb().into_color()),
-            DynamicImage::ImageRgba16(ref mut p) => p.blend_pixel(x, y, pixel.into_color()),
+            DynamicImage::ImageLuma16(ref mut p) => p.blend_pixel(x, y, pixel.to_luma().into()),
+            DynamicImage::ImageLumaA16(ref mut p) => p.blend_pixel(x, y, pixel.to_luma_alpha().into()),
+            DynamicImage::ImageRgb16(ref mut p) => p.blend_pixel(x, y, pixel.to_rgb().into()),
+            DynamicImage::ImageRgba16(ref mut p) => p.blend_pixel(x, y, pixel.into()),
         }
     }
 

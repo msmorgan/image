@@ -1,6 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use num_traits::{NumCast, ToPrimitive, Zero};
+use num_traits::{NumCast, ToPrimitive};
 
 use crate::traits::{Pixel, Primitive};
 
@@ -257,38 +257,30 @@ impl<T: Primitive + 'static> Pixel for $ident<T> {
     }
 
     fn to_rgb(&self) -> Rgb<T> {
-        let mut pix = Rgb([Zero::zero(), Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
-        pix
+        Rgb::from(*self)
     }
 
     fn to_bgr(&self) -> Bgr<T> {
-        let mut pix = Bgr([Zero::zero(), Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
-        pix
+        Bgr::from(*self)
     }
 
     fn to_rgba(&self) -> Rgba<T> {
-        let mut pix = Rgba([Zero::zero(), Zero::zero(), Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
-        pix
+        Rgba::from(*self)
     }
 
     fn to_bgra(&self) -> Bgra<T> {
-        let mut pix = Bgra([Zero::zero(), Zero::zero(), Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
-        pix
+        Bgra::from(*self)
     }
 
     fn to_luma(&self) -> Luma<T> {
         let mut pix = Luma([Zero::zero()]);
-        pix.from_color(self);
+        FromColor::from_color(&mut pix, self);
         pix
     }
 
     fn to_luma_alpha(&self) -> LumaA<T> {
         let mut pix = LumaA([Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
+        FromColor::from_color(&mut pix, self);
         pix
     }
 
@@ -605,8 +597,9 @@ impl_from! {
         => Bgra([y, y, y, a]);
 }
 
+#[deprecated(note = "Use `From` instead")]
 /// Provides color conversions for the different pixel types.
-pub trait FromColor<Other> {
+pub(crate) trait FromColor<Other> {
     /// Changes `self` to represent `Other` in the color space of `Self`
     fn from_color(&mut self, _: &Other);
 }
@@ -614,31 +607,26 @@ pub trait FromColor<Other> {
 /// Copy-based conversions to target pixel types using `FromColor`.
 // FIXME: this trait should be removed and replaced with real color space models
 // rather than assuming sRGB.
+#[deprecated(note = "Use `Into` instead")]
 pub(crate) trait IntoColor<Other> {
     /// Constructs a pixel of the target type and converts this pixel into it.
     fn into_color(&self) -> Other;
 }
 
-impl<O, S> IntoColor<O> for S
-    where
-        O: Pixel + FromColor<S> {
-    fn into_color(&self) -> O {
-        // Note we cannot use Pixel::CHANNELS_COUNT here to directly construct
-        // the pixel due to a current bug/limitation of consts.
-        let mut pix = O::from_channels(Zero::zero(), Zero::zero(), Zero::zero(), Zero::zero());
-        pix.from_color(self);
-        pix
-    }
-}
-
-impl<In: Pixel, Out: Pixel> FromColor<In> for Out
-where
-    Out: From<In>
-{
+#[allow(deprecated)]
+impl<In: Pixel, Out: Pixel + From<In>> FromColor<In> for Out {
     fn from_color(&mut self, other: &In) {
         *self = (*other).into();
     }
 }
+
+#[allow(deprecated)]
+impl<In: Pixel + Into<Out>, Out: Pixel> IntoColor<Out> for In {
+    fn into_color(&self) -> Out {
+        self.clone().into()
+    }
+}
+
 
 /// Blends a color inter another one
 pub(crate) trait Blend {
@@ -1058,6 +1046,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_lossless_conversions() {
         use super::IntoColor;
 

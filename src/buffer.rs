@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use std::path::Path;
 use std::slice::{ChunksExact, ChunksExactMut};
 
-use crate::color::{FromColor, Luma, LumaA, Rgb, Rgba, Bgr, Bgra};
+use crate::color::{Luma, LumaA, Rgb, Rgba, Bgr, Bgra};
 use crate::flat::{FlatSamples, SampleLayout};
 use crate::dynimage::{save_buffer, save_buffer_with_format};
 use crate::error::ImageResult;
@@ -1260,7 +1260,7 @@ impl<'a, 'b, Container, FromType: Pixel + 'static, ToType: Pixel + 'static>
     ConvertBuffer<ImageBuffer<ToType, Vec<ToType::Subpixel>>> for ImageBuffer<FromType, Container>
 where
     Container: Deref<Target = [FromType::Subpixel]>,
-    ToType: FromColor<FromType>,
+    ToType: From<FromType>,
     FromType::Subpixel: 'static,
     ToType::Subpixel: 'static,
 {
@@ -1281,7 +1281,7 @@ where
         let mut buffer: ImageBuffer<ToType, Vec<ToType::Subpixel>> =
             ImageBuffer::new(self.width, self.height);
         for (to, from) in buffer.pixels_mut().zip(self.pixels()) {
-            to.from_color(from)
+            *to = (*from).into();
         }
         buffer
     }
@@ -1336,7 +1336,7 @@ mod test {
         let mut a: RgbImage = ImageBuffer::new(10, 10);
         {
             let val = a.pixels_mut().next().unwrap();
-            *val = color::Rgb([42, 0, 0]);
+            *val = Rgb([42, 0, 0]);
         }
         assert_eq!(a.data[0], 42)
     }
@@ -1395,7 +1395,7 @@ mod test {
 #[cfg(test)]
 #[cfg(feature = "benchmarks")]
 mod benchmarks {
-    use super::{ConvertBuffer, GrayImage, ImageBuffer, Pixel, RgbImage};
+    use super::{Buffer, GrayImage, ImageBuffer, Pixel, RgbImage};
     use crate::GenericImage;
     use crate::math::Rect;
     use test;
