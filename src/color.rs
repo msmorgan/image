@@ -273,15 +273,11 @@ impl<T: Primitive + 'static> Pixel for $ident<T> {
     }
 
     fn to_luma(&self) -> Luma<T> {
-        let mut pix = Luma([Zero::zero()]);
-        FromColor::from_color(&mut pix, self);
-        pix
+        Luma::from(*self)
     }
 
     fn to_luma_alpha(&self) -> LumaA<T> {
-        let mut pix = LumaA([Zero::zero(), Zero::zero()]);
-        FromColor::from_color(&mut pix, self);
-        pix
+        LumaA::from(*self)
     }
 
     fn map<F>(& self, f: F) -> $ident<T> where F: FnMut(T) -> T {
@@ -416,110 +412,74 @@ macro_rules! impl_from {
                     ( ($in_el), ($out_el), ($convert) ),
                 )*
             ),
-            (
-                $(
-                    (
-                        ( ($in_ty), ( [ $( $cmp ),* ] ) ),
-                        (
-                            $(
-                                ( ($out_ty), ($body) ),
-                            )+
-                        ),
-                    ),
-                )*
-            ),
+            ($(
+                (
+                    ( ($in_ty), ( [ $( $cmp ),* ] ) ),
+                    ($(
+                        ( ($out_ty), ($body) ),
+                    )+)
+                ),
+            )*)
         );
     };
 
     // Stage 1: Call recursively for each group of element conversions.
     (
         @__split_elements,
-        ( $( $el_convert:tt, )* ),
-        $defs:tt,
+        ($(
+            $el_convert:tt,
+        )*),
+        $defs:tt
     ) => {
-        $(
-            impl_from!(
-                @__split_inputs,
-                $el_convert,
-                $defs,
-            );
-        )*
+        $( impl_from!(@__split_inputs, $el_convert, $defs); )*
     };
 
     // Stage 2: Call recursively for each input struct type.
     (
         @__split_inputs,
         $el_convert:tt,
-        (
-            $(
-                (
-                    $in_cmp:tt,
-                    $outputs:tt,
-                ),
-            )*
-        ),
+        ($(
+            ( $in_cmp:tt, $outputs:tt ),
+        )*)
     ) => {
         $(
-            impl_from!(
-                @__add_same_ty_conversion,
-                $el_convert,
-                $in_cmp,
-                $outputs,
-            );
+            impl_from!(@__add_same_ty_conversion, $el_convert, $in_cmp);
+
+            impl_from!(@__split_outputs, $el_convert, $in_cmp, $outputs);
         )*
     };
 
-    // Stage 3: If a conversion function exists (i.e., the input and output elements are not both
+    // Stage 3a: If a conversion function exists (i.e., the input and output elements are not both
     // `T`), call recursively to also emit `impl From<InTy<InEl>> for InTy<OutEl>`.
     //
     // This extra step is required because defining `impl<T> From<InTy<T>> for InTy<T>` would
     // conflict with the blanket implementation `impl<T> From<T> for T`, defined in `core`.
     (
         @__add_same_ty_conversion,
-        ( $in_el:tt, $out_el:tt, ( $( $convert:ident )? ) ),
-        ( $in_ty:tt, $components:tt ),
-        $outputs:tt,
+        ( $in_el:tt, $out_el:tt, ($( $convert:ident )?) ),
+        $in_cmp:tt
     ) => {
-        $(
-            impl_from!(
-                @__final,
-                ( $in_el, $out_el, ( $convert ) ),
-                ( $in_ty, $components ),
-                ( $in_ty, $components ),
-            );
-        )?
-
-        impl_from!(
-            @__split_outputs,
-            ( $in_el, $out_el, ( $( $convert )? ) ),
-            ( $in_ty, $components ),
-            $outputs,
-        );
+        $( impl_from!(@__emit_impl, ( $in_el, $out_el, ($convert) ), $in_cmp, $in_cmp); )?
     };
 
-    // Stage 4: Call recursively for each output definition.
+    // Stage 3b: Call recursively for each output definition.
     (
         @__split_outputs,
         $el_convert:tt,
         $in_cmp:tt,
-        ( $( $out_body:tt, )* ),
+        ($(
+            $out_body:tt,
+        )*)
     ) => {
-        $(
-            impl_from!(
-                @__final,
-                $el_convert,
-                $in_cmp,
-                $out_body,
-            );
-        )*
+        $( impl_from!(@__emit_impl, $el_convert, $in_cmp, $out_body); )*
     };
 
-    // Final stage: Output impl where elements are both `T`.
+    // Stage 4a: Output impl where elements are both `T`.
     (
-        @__final,
+        @__emit_impl,
         ( (T), (T), () ),
         ( ($in_ty:ident), ( [ $( $cmp:ident ),* ] ) ),
-        ( ($out_ty:ident), ($body:expr) ),
+        ( ($out_ty:ident), ($body:expr) )
     ) => {
         impl<T: Primitive> From<$in_ty<T>> for $out_ty<T> {
             #[inline]
@@ -531,12 +491,12 @@ macro_rules! impl_from {
         }
     };
 
-    // Final stage: Output impl where elements are different, and there is a conversion function.
+    // Stage 4b: Output impl where elements are different concrete types.
     (
-        @__final,
+        @__emit_impl,
         ( ($in_el:ident), ($out_el:ident), ($convert:ident) ),
         ( ($in_ty:ident), ( [ $( $cmp:ident ),* ] ) ),
-        ( ($out_ty:ident), ($body:expr) ),
+        ( ($out_ty:ident), ($body:expr) )
     ) => {
         impl From<$in_ty<$in_el>> for $out_ty<$out_el> {
             #[inline]
